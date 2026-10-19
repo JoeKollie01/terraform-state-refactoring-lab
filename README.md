@@ -427,6 +427,3 @@ The CLI commands still exist and are good to know (they show up on the Terraform
 
 Everything the lab creates lives in `workspace/`, so deleting it removes all state and simulated infrastructure.
 
-## Next challenge
-
-Redo the lab against a real cloud: swap `random_pet` + `local_file` for an S3 bucket, `random_id` + `local_file` for per-service SQS queues, and `random_password` for an `aws_secretsmanager_secret`. The `moved`, `import`, and `removed` steps stay exactly the same; only the resource types and import IDs change.
