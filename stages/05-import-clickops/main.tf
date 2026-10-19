@@ -1,0 +1,161 @@
+# =====================================================================
+# PLAT-104: Bring a hand-made (ClickOps) resource under Terraform
+# =====================================================================
+
+terraform {
+  required_version = ">= 1.7"
+
+  required_providers {
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.5"
+    }
+  }
+}
+
+variable "services" {
+  description = "Microservices running on the cluster"
+  type        = list(string)
+  default     = ["auth", "payments", "catalog"]
+}
+
+resource "random_pet" "cluster_name" {
+  length = 2
+  prefix = "shopstack"
+}
+
+resource "local_file" "cluster_manifest" {
+  filename = "${path.module}/infra/cluster.json"
+  content = jsonencode({
+    cluster_name = random_pet.cluster_name.id
+    region       = "us-east-1"
+    k8s_version  = "1.30"
+  })
+}
+
+# One module instance per service, tracked by NAME.
+module "service" {
+  source   = "./modules/service"
+  for_each = toset(var.services)
+
+  name         = each.key
+  cluster_name = random_pet.cluster_name.id
+  output_dir   = "${path.module}/infra/services"
+}
+
+# Production database master password.
+resource "random_password" "db" {
+  length = 24
+}
+
+resource "local_sensitive_file" "db_env" {
+  filename = "${path.module}/infra/secrets/db.env"
+  content  = "DB_HOST=shopstack-db.internal\nDB_USER=app\nDB_PASSWORD=${random_password.db.result}\n"
+}
+
+# Payments webhook secret. Created BY HAND during incident INC-2291,
+# now managed by Terraform. Rotating it would break the payment partner.
+resource "random_password" "payments_webhook" {
+  length  = 32
+  special = false
+}
+
+resource "local_sensitive_file" "payments_webhook_env" {
+  filename = "${path.module}/infra/secrets/payments-webhook.env"
+  content  = "WEBHOOK_SECRET=${random_password.payments_webhook.result}\n"
+}
+
+# ---------------------------------------------------------------------
+# PLAT-104: adopt the hand-made secret instead of creating a new one.
+# For a real cloud resource the id would be its identifier, e.g.
+#   id = "shopstack-payments-webhooks"   (an S3 bucket name)
+# Once applied, this block is a no-op and can be deleted.
+# ---------------------------------------------------------------------
+import {
+  to = random_password.payments_webhook
+  id = trimspace(file("${path.module}/../clickops/payments-webhook-secret.txt"))
+}
+
+# ---------------------------------------------------------------------
+# Refactoring history. Moves chain together, so a state file from ANY
+# earlier stage can catch up in a single plan.
+# ---------------------------------------------------------------------
+# PLAT-101: real names
+moved {
+  from = random_pet.x
+  to   = random_pet.cluster_name
+}
+moved {
+  from = local_file.file1
+  to   = local_file.cluster_manifest
+}
+
+# PLAT-102: list position -> service name.
+# Index order MUST match the original list: auth=0, payments=1, catalog=2
+moved {
+  from = random_id.svc[0]
+  to   = random_id.svc["auth"]
+}
+moved {
+  from = random_id.svc[1]
+  to   = random_id.svc["payments"]
+}
+moved {
+  from = random_id.svc[2]
+  to   = random_id.svc["catalog"]
+}
+moved {
+  from = local_file.svc[0]
+  to   = local_file.svc["auth"]
+}
+moved {
+  from = local_file.svc[1]
+  to   = local_file.svc["payments"]
+}
+moved {
+  from = local_file.svc[2]
+  to   = local_file.svc["catalog"]
+}
+
+# PLAT-103: resources -> module instances
+moved {
+  from = random_id.svc["auth"]
+  to   = module.service["auth"].random_id.this
+}
+moved {
+  from = random_id.svc["payments"]
+  to   = module.service["payments"].random_id.this
+}
+moved {
+  from = random_id.svc["catalog"]
+  to   = module.service["catalog"].random_id.this
+}
+moved {
+  from = local_file.svc["auth"]
+  to   = module.service["auth"].local_file.manifest
+}
+moved {
+  from = local_file.svc["payments"]
+  to   = module.service["payments"].local_file.manifest
+}
+moved {
+  from = local_file.svc["catalog"]
+  to   = module.service["catalog"].local_file.manifest
+}
+
+output "cluster_name" {
+  value = random_pet.cluster_name.id
+}
+
+output "service_ids" {
+  value = { for name, svc in module.service : name => svc.id }
+}
+
+output "db_password" {
+  value     = random_password.db.result
+  sensitive = true
+}
